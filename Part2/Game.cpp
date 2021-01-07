@@ -1,13 +1,25 @@
 #include "Game.hpp"
+
 #define NUM_OF_NEIGHBORS 8
 #define RESURRECTION_NUMBER 3
 #define MINIMUM_LIFE_SUSTAINING_NEIGHBORS 2
 #define NUM_OF_COLORS 7
 
+void PrintBoard(const GameBoard &board);
+
+
 static const char *colors[7] = {BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN};
 /*--------------------------------------------------------------------------------
 								
 --------------------------------------------------------------------------------*/
+Game::Game(game_params params) {
+    m_thread_num = params.n_thread;
+    m_gen_num = params.n_gen;
+    file_name = params.filename;
+    interactive_on = params.interactive_on;
+    print_on = params.print_on;
+}
+
 void Game::run() {
 
 	_init_game(); // Starts the threads and all other variables you need
@@ -24,9 +36,25 @@ void Game::run() {
 }
 
 void Game::_init_game() {
-	// Create game fields - Consider using utils:read_file, utils::split
-	// Create & Start threads
-	// Testing of your implementation will presume all threads are started here
+    current_board = new GameBoard();
+    next_board = new GameBoard();
+    int work_lines;
+    vector<string> all_lines = utils::read_lines(file_name);
+            /* building first board from the file */
+    for(auto line = all_lines.begin(); line != all_lines.end(); line++) {
+        vector<int> int_vec;
+        vector<string> splited_line = utils::split(*(line),' ');
+        for(auto character = splited_line.begin(); character != splited_line.end(); character++){
+            int num = std::stoi(*character);
+            int_vec.push_back(num);
+        }
+        current_board->push_back(int_vec);
+    }
+    vector<int> zeroes(current_board[0].size(), 0);
+    *next_board = vector<vector<int>>(current_board->size(), zeroes);
+    m_thread_num = m_thread_num < current_board->size() ? m_thread_num : current_board->size();
+    work_lines = current_board->size() / m_thread_num;
+    num_of_work_lines = work_lines;
 }
 
 void Game::_step(uint curr_gen) {
@@ -43,9 +71,11 @@ void Game::_destroy_game(){
 	// Destroys board and frees all threads and resources 
 	// Not implemented in the Game's destructor for testing purposes. 
 	// All threads must be joined here
-	for (uint i = 0; i < m_thread_num; ++i) {
-        m_threadpool[i]->join();
-    }
+//	for (uint i = 0; i < m_thread_num; ++i) {
+//        m_threadpool[i]->join();
+//    }
+    free(current_board);
+    free(next_board);
 }
 
 /*--------------------------------------------------------------------------------
@@ -62,8 +92,7 @@ inline void Game::print_board(const char* header) {
 		// Print small header if needed
 		if (header != nullptr)
 			cout << "<------------" << header << "------------>" << endl;
-		
-		// TODO: Print the board 
+		    PrintBoard(*current_board);
 
 		// Display for GEN_SLEEP_USEC micro-seconds on screen 
 		if(interactive_on)
@@ -82,22 +111,23 @@ void Game::swapBoards() {
 void Game::distributeWork() {
     distributeTasks(GameOfLifeTask::TaskType::AdvanceGeneration);
     for(int i=0; i<thread_num();i++){
-        GameOfLifeTask task = tasks.pop();
+        GameOfLifeTask task = tasks.front();
+        tasks.pop();
         task.preformTask();
     }
     ///TODO: Wait for it to finish
     swapBoards();
     distributeTasks(GameOfLifeTask::TaskType::DecideSpecies);
     for(int i=0; i<thread_num();i++){
-        GameOfLifeTask task = tasks.pop();
+        GameOfLifeTask task = tasks.front();
+        tasks.pop();
         task.preformTask();
     }
-    swapBoards();
 }
 
 void Game::distributeTasks(Game::GameOfLifeTask::TaskType type) {
     int start = 0;
-    int end = num_of_work_lines - 1;
+    int end = num_of_work_lines;
     for(int i=0; i < thread_num() -1; i++){ //Jobs for Balanced WorkThreads
         GameOfLifeTask new_task(type, start, end,
                 *current_board, *next_board);
@@ -109,29 +139,33 @@ void Game::distributeTasks(Game::GameOfLifeTask::TaskType type) {
     tasks.push(new_task);
 }
 
-/* Function sketch to use for printing the board. You will need to decide its placement and how exactly 
-	to bring in the field's parameters. 
+uint Game::thread_num() const {
+    return m_thread_num;
+}
 
-		cout << u8"╔" << string(u8"═") * field_width << u8"╗" << endl;
-		for (uint i = 0; i < field_height ++i) {
-			cout << u8"║";
-			for (uint j = 0; j < field_width; ++j) {
-                if (field[i][j] > 0)
-                    cout << colors[field[i][j] % 7] << u8"█" << RESET;
-                else
-                    cout << u8"░";
-			}
-			cout << u8"║" << endl;
-		}
-		cout << u8"╚" << string(u8"═") * field_width << u8"╝" << endl;
-*/
+/* Function sketch to use for printing the board. You will need to decide its placement and how exactly
+	to bring in the field's parameters. */
+void PrintBoard(const GameBoard &board) {
+    cout << u8"╔" << string(u8"═") * board[0].size() << u8"╗" << endl;
+    for (uint i = 0; i < board.size() ;++i) {
+        cout << u8"║";
+        for (uint j = 0; j < board[0].size(); ++j) {
+            if (board[i][j] > 0)
+                cout << colors[board[i][j] % 7] << u8"█" << RESET;
+            else
+                cout << u8"░";
+        }
+        cout << u8"║" << endl;
+    }
+    cout << u8"╚" << string(u8"═") * board[0].size() << u8"╝" << endl;
+}
 
 
 /*--------------------------------------------------------------------------------
 					Class GameOfLife Task Methods and Implementation
 --------------------------------------------------------------------------------*/
 
-Game::GameOfLifeTask::GameOfLifeTask(TaskType type, int start, int end, GameBoard& target, GameBoard& source):
+Game::GameOfLifeTask::GameOfLifeTask(TaskType type, int start, int end, GameBoard& source, GameBoard& target):
 type(type), start_index(start), end_index(end), source(source), target(target){}
 
 void Game::GameOfLifeTask::preformTask() {
@@ -148,19 +182,20 @@ void Game::GameOfLifeTask::advanceGeneration() {
         for(int j = 0; j < source[0].size(); j++){
             int num_of_alive_neighbors = 0;
             vector<int> histogram = vector<int>(NUM_OF_COLORS + 1, 0);
-            for(int k = -1; k < 1; k++){
-                for(int t = -1; t < 1; t++){
-                    if(t==k==0) continue;
-                    try {
-                        int value = source[i + k][j + t];
-                        if (value != 0) {
-                            num_of_alive_neighbors++;
-                        }
-                        histogram[value]++;
+            for(int k = -1; k <= 1; k++){
+                for(int t = -1; t <= 1; t++) {
+                    if (t == 0 && k == 0) continue;
+                    if(i+k < 0 || j+t < 0 || i+k >= source.size() || j+t >= source[0].size()) continue;
+                    int value = source[i + k][j + t];
+                    if(value < 1 && value > 7) {
+                        assert(false);
                     }
-                    catch(...){
-                        ///We are out of bounds, and so the cell is dead. do nothing
+                    if (value != 0) {
+                        num_of_alive_neighbors++;
                     }
+                    histogram[value]++;
+
+
                 }
             }
             if(source[i][j] == 0){
@@ -194,26 +229,27 @@ void Game::GameOfLifeTask::advanceGeneration() {
 void Game::GameOfLifeTask::decideSpecies() {
     for(int i = start_index; i < end_index; i++){
         for(int j = 0; j < source[0].size(); j++){
+            if(source[i][j] == 0) {
+                target[i][j] = 0;
+                continue;
+            }
             int num_of_alive_neighbors = 0;
             int sum = 0;
-            for(int k = -1; k < 1; k++){
-                for(int t = -1; t < 1; t++){
-                    try {
-                        int value = source[i + k][j + t];
-                        if (value != 0) {
-                            num_of_alive_neighbors++;
-                        }
-                        sum += source[i + k][j + t];
+            for(int k = -1; k <= 1; k++){
+                for(int t = -1; t <= 1; t++) {
+                    if (i + k < 0 || j + t < 0 || i + k >= source.size() || j + t >= source[0].size()) continue;
+                    int value = source[i + k][j + t];
+                    if (value != 0) {
+                        num_of_alive_neighbors++;
                     }
-                    catch(...){
-                        ///We are out of bounds, and so the cell is dead. do nothing
-                    }
+                    sum += value;
                 }
             }
-            int new_species = (int)round((double)sum/num_of_alive_neighbors);
+            int new_species = (int)round((double)sum/(double)num_of_alive_neighbors);
             target[i][j] = new_species;
         }
     }
 }
+
 
 
